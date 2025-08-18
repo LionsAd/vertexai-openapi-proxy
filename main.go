@@ -266,6 +266,76 @@ func makeProxy(target *url.URL) *httputil.ReverseProxy {
 	}
 }
 
+func makeVertexProxy(target *url.URL) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			logger.Debug("makeVertexProxy Director: Processing request", "method", req.Method, "path", req.URL.Path, "remote_addr", req.RemoteAddr)
+
+			req.URL.Scheme = target.Scheme
+			req.URL.Host = target.Host
+			req.Host = target.Host
+
+			originalPath := req.URL.Path
+			req.URL.Path = strings.TrimPrefix(originalPath, "/vertex")
+
+			logger.Debug("makeVertexProxy Director: Rewriting path", "original_path", originalPath, "new_path", req.URL.Path)
+			logger.Debug("makeVertexProxy Director: Final target URL for upstream", "url", req.URL.String())
+
+			if tok, err := getToken(req.Context()); err == nil {
+				req.Header.Set("Authorization", "Bearer "+tok)
+				logger.Debug("makeVertexProxy Director: Authorization header set", "path", req.URL.Path)
+			} else {
+				logger.Error("Error getting token for request", "path", originalPath, "error", err)
+			}
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			logger.Debug("makeVertexProxy ModifyResponse: Received response from upstream", "host", resp.Request.URL.Host, "method", resp.Request.Method, "path", resp.Request.URL.Path, "status", resp.Status)
+			var upstreamHeaders strings.Builder
+			for k, v := range resp.Header {
+				upstreamHeaders.WriteString(fmt.Sprintf("\n  %s: %s", k, strings.Join(v, ", ")))
+			}
+			if upstreamHeaders.Len() > 0 {
+				logger.Debug("makeVertexProxy ModifyResponse: Upstream response headers", "headers", upstreamHeaders.String())
+			}
+
+			if resp.StatusCode >= 400 {
+				bodyBytes, err := io.ReadAll(resp.Body)
+				if err != nil {
+					logger.Error("makeVertexProxy ModifyResponse: Error reading error response body from upstream", "error", err)
+					resp.Body = io.NopCloser(bytes.NewBuffer(nil))
+				} else {
+					resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+					if resp.Header.Get("Content-Encoding") == "gzip" {
+						gzipReader, err := gzip.NewReader(bytes.NewReader(bodyBytes))
+						if err != nil {
+							logger.Error("makeVertexProxy ModifyResponse: Error creating gzip reader for error response body", "error", err, "detail", "Logging raw body.")
+							logger.Debug("makeVertexProxy ModifyResponse: Upstream error response body (raw gzipped)", "body", string(bodyBytes))
+						} else {
+							decompressedBodyBytes, err := io.ReadAll(gzipReader)
+							if err != nil {
+								logger.Error("makeVertexProxy ModifyResponse: Error decompressing gzip error response body", "error", err, "detail", "Logging raw body.")
+								logger.Debug("makeVertexProxy ModifyResponse: Upstream error response body (raw gzipped)", "body", string(bodyBytes))
+							} else {
+								logger.Debug("makeVertexProxy ModifyResponse: Upstream error response body (decompressed)", "body", string(decompressedBodyBytes))
+							}
+							gzipReader.Close()
+						}
+					} else {
+						logger.Debug("makeVertexProxy ModifyResponse: Upstream error response body", "body", string(bodyBytes))
+					}
+				}
+			}
+			return nil
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			logger.Error("HTTP proxy error", "method", r.Method, "target_url", r.URL.String(), "error", err)
+			w.WriteHeader(http.StatusBadGateway)
+			io.WriteString(w, fmt.Sprintf("Proxy error connecting to upstream service: %v", err))
+		},
+	}
+}
+
 func handleModels(w http.ResponseWriter, r *http.Request) {
 	logger.Debug("handleModels: Received request", "method", r.Method, "path", r.URL.Path, "remote_addr", r.RemoteAddr)
 
@@ -356,7 +426,21 @@ func main() {
 	}
 	logger.Info("main: Proxy target URL configured", "url", target.String())
 
+	var vertexProxyHost string
+	if location == "global" {
+		vertexProxyHost = "aiplatform.googleapis.com"
+	} else {
+		vertexProxyHost = fmt.Sprintf(vertexAIAPIHostFormat, location)
+	}
+
+	vertexTarget, err := url.Parse("https://" + vertexProxyHost)
+	if err != nil {
+		log.Fatalf("main: Error parsing vertex target host '%s': %v", vertexProxyHost, err)
+	}
+	logger.Info("main: Vertex proxy target URL configured", "url", vertexTarget.String())
+
 	http.HandleFunc("/v1/models", handleModels)
+	http.Handle("/vertex/", makeVertexProxy(vertexTarget))
 	http.Handle("/v1/", makeProxy(target))
 
 	// Get port from environment variable, default to 8080
