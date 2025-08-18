@@ -89,6 +89,7 @@ var googleFindDefaultCredentials = google.FindDefaultCredentials
 var (
 	projectID string
 	location  string
+	apiKey    string
 	// vertexAIAPIHostFormat specifies the format for the Vertex AI API host.
 	// It's a variable to allow overriding for testing.
 	// Example: "%s-aiplatform.googleapis.com" where %s is the location.
@@ -143,6 +144,29 @@ func getToken(ctx context.Context) (string, error) {
 	expiry = tok.Expiry
 	logger.Info("getToken: Successfully fetched new token.")
 	return token, nil
+}
+
+func authenticateRequest(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			logger.Warn("authenticateRequest: Missing Authorization header", "path", r.URL.Path, "remote_addr", r.RemoteAddr)
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, "Authorization header required")
+			return
+		}
+
+		expectedAuth := "Bearer " + apiKey
+		if authHeader != expectedAuth {
+			logger.Warn("authenticateRequest: Invalid API key", "path", r.URL.Path, "remote_addr", r.RemoteAddr)
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, "Invalid API key")
+			return
+		}
+
+		logger.Debug("authenticateRequest: Authentication successful", "path", r.URL.Path, "remote_addr", r.RemoteAddr)
+		next.ServeHTTP(w, r)
+	})
 }
 
 func makeProxy(target *url.URL) *httputil.ReverseProxy {
@@ -397,11 +421,16 @@ func main() {
 	logger.Info("Starting proxy server...")
 	location = os.Getenv("VERTEXAI_LOCATION")
 	projectID = os.Getenv("VERTEXAI_PROJECT")
+	apiKey = os.Getenv("API_KEY")
 
 	logger.Info("main: Configuration", "vertexai_location", location, "vertexai_project", projectID)
 
 	if location == "" || projectID == "" {
 		log.Fatal("VERTEXAI_LOCATION and VERTEXAI_PROJECT env vars must be set")
+	}
+
+	if apiKey == "" {
+		log.Fatal("API_KEY env var must be set")
 	}
 
 	var baseURL string
@@ -439,9 +468,9 @@ func main() {
 	}
 	logger.Info("main: Vertex proxy target URL configured", "url", vertexTarget.String())
 
-	http.HandleFunc("/v1/models", handleModels)
-	http.Handle("/vertex/", makeVertexProxy(vertexTarget))
-	http.Handle("/v1/", makeProxy(target))
+	http.Handle("/v1/models", authenticateRequest(http.HandlerFunc(handleModels)))
+	http.Handle("/vertex/", authenticateRequest(makeVertexProxy(vertexTarget)))
+	http.Handle("/v1/", authenticateRequest(makeProxy(target)))
 
 	// Get port from environment variable, default to 8080
 	port := os.Getenv("PORT")
