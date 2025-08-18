@@ -300,9 +300,21 @@ func makeVertexProxy(target *url.URL) *httputil.ReverseProxy {
 			req.Host = target.Host
 
 			originalPath := req.URL.Path
-			req.URL.Path = strings.TrimPrefix(originalPath, "/vertex")
+			strippedPath := strings.TrimPrefix(originalPath, "/vertex")
 
-			logger.Debug("makeVertexProxy Director: Rewriting path", "original_path", originalPath, "new_path", req.URL.Path)
+			// Replace project and location in the path with environment variable values
+			// Expected format: /v1/projects/{project}/locations/{location}/...
+			pathParts := strings.Split(strings.TrimPrefix(strippedPath, "/"), "/")
+			if len(pathParts) >= 5 && pathParts[0] == "v1" && pathParts[1] == "projects" && pathParts[3] == "locations" {
+				// Override project and location with environment variable values
+				pathParts[2] = projectID
+				pathParts[4] = location
+				req.URL.Path = "/" + strings.Join(pathParts, "/")
+				logger.Debug("makeVertexProxy Director: Overrode project and location", "original_path", originalPath, "stripped_path", strippedPath, "final_path", req.URL.Path, "project", projectID, "location", location)
+			} else {
+				req.URL.Path = strippedPath
+				logger.Debug("makeVertexProxy Director: Path doesn't match expected format, using as-is", "original_path", originalPath, "final_path", req.URL.Path)
+			}
 			logger.Debug("makeVertexProxy Director: Final target URL for upstream", "url", req.URL.String())
 
 			if tok, err := getToken(req.Context()); err == nil {
