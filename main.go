@@ -394,12 +394,12 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 
 		if len(customModelIDsFiltered) > 0 {
 			modelIDs = customModelIDsFiltered
-			logger.Info("handleModels: Using custom models from VERTEXAI_AVAILABLE_MODELS", "models", modelIDs)
+			logger.Debug("handleModels: Using custom models from VERTEXAI_AVAILABLE_MODELS", "models", modelIDs)
 		} else {
 			logger.Warn("handleModels: VERTEXAI_AVAILABLE_MODELS set but empty", "env_var_value", availableModelsStr, "using_default_models", modelIDs)
 		}
 	} else {
-		logger.Info("handleModels: VERTEXAI_AVAILABLE_MODELS not set or empty", "using_default_models", modelIDs)
+		logger.Debug("handleModels: VERTEXAI_AVAILABLE_MODELS not set or empty", "using_default_models", modelIDs)
 	}
 
 	currentTime := time.Now().Unix()
@@ -424,7 +424,7 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 		return
 	}
-	logger.Info("handleModels: Successfully sent models list", "count", len(responseModels))
+	logger.Debug("handleModels: Successfully sent models list", "count", len(responseModels))
 }
 
 func main() {
