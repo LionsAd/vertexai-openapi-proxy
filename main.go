@@ -305,7 +305,7 @@ func makeVertexProxy(target *url.URL) *httputil.ReverseProxy {
 			// Replace project and location in the path with environment variable values
 			// Expected format: /v1/projects/{project}/locations/{location}/...
 			pathParts := strings.Split(strings.TrimPrefix(strippedPath, "/"), "/")
-			if len(pathParts) >= 5 && pathParts[0] == "v1" && pathParts[1] == "projects" && pathParts[3] == "locations" {
+			if len(pathParts) >= 5 && pathParts[1] == "projects" && pathParts[3] == "locations" {
 				// Override project and location with environment variable values
 				pathParts[2] = projectID
 				pathParts[4] = location
